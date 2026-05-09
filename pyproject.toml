@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "botforge"
+version = "0.1.0"
+description = "A Python DSL that compiles to C++ for Arduino robots"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "BotForge Contributors" }]
+keywords = ["robotics", "arduino", "dsl", "embedded", "code-generation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+    "typer>=0.12",
+    "jinja2>=3.1",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[project.scripts]
+botforge = "botforge.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["botforge*"]
+
+[tool.setuptools.package-data]
+botforge = ["templates/*.j2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

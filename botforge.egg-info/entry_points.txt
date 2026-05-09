@@ -1,0 +1,2 @@
+[console_scripts]
+botforge = botforge.cli:app

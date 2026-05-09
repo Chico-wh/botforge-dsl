@@ -1,0 +1,398 @@
+Metadata-Version: 2.4
+Name: botforge
+Version: 0.1.0
+Summary: A Python DSL that compiles to C++ for Arduino robots
+Author: BotForge Contributors
+License: MIT License
+        
+        Copyright (c) 2025 BotForge Contributors
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Keywords: robotics,arduino,dsl,embedded,code-generation
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Code Generators
+Classifier: Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator
+Classifier: Programming Language :: Python :: 3.11
+Classifier: License :: OSI Approved :: MIT License
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: typer>=0.12
+Requires-Dist: jinja2>=3.1
+Requires-Dist: rich>=13.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-cov>=5.0; extra == "dev"
+Dynamic: license-file
+
+# 🤖 BotForge
+
+> **Write robots in Python. Compile to C++.**
+> A Python DSL compiler for Arduino, ESP32, and ROS 2 — focused on robotics.
+
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
+
+> ⚠️ **Experimental project.** BotForge is in active development. The DSL and IR may change between versions.
+
+---
+
+## What is BotForge?
+
+BotForge is a **mini-framework and CLI** that lets you write robot logic in a Python DSL and compile it to idiomatic C++ for embedded targets (starting with Arduino).
+
+You write this:
+
+```python
+from botforge import Bot, Wheels, Ultrasonic
+
+bot = Bot("mini_rover")
+
+bot.use(Wheels(left=(5, 6), right=(9, 10)))
+front = bot.use(Ultrasonic("front", trigger=7, echo=8))
+
+@bot.loop
+def main():
+    if front.distance < 20:
+        bot.turn_left(speed=50)
+    else:
+        bot.forward(speed=80)
+```
+
+BotForge generates this:
+
+```cpp
+#include <Arduino.h>
+#include <NewPing.h>
+
+#define MAX_DISTANCE 200
+
+NewPing front(7, 8, MAX_DISTANCE);
+
+class Wheels {
+public:
+    Wheels(int leftPin1, int leftPin2, int rightPin1, int rightPin2)
+        : leftPin1(leftPin1), leftPin2(leftPin2),
+          rightPin1(rightPin1), rightPin2(rightPin2) {}
+
+    void forward(int speed) { ... }
+    void turnLeft(int speed) { ... }
+    void stop() { ... }
+
+private:
+    int leftPin1, leftPin2, rightPin1, rightPin2;
+};
+
+Wheels wheels(5, 6, 9, 10);
+
+void setup() {}
+
+void loop() {
+    if (front.ping_cm() < 20) {
+        wheels.turnLeft(50);
+    } else {
+        wheels.forward(80);
+    }
+}
+```
+
+---
+
+## The Problem
+
+Writing Arduino C++ for robots is repetitive and error-prone:
+- You manually manage pin numbers scattered across the file
+- Every project re-implements the same `Wheels` class
+- Sensor API differences (`ping_cm()` vs `analogRead()`) leak into your logic
+- There's no abstraction layer — hardware details and behavior are mixed
+
+## The Solution
+
+BotForge separates **what the robot does** from **how the hardware works**:
+- You describe behavior in a clean Python DSL
+- BotForge maps abstractions to real C++ libraries
+- Generated code uses `NewPing`, `Servo.h`, and other proven libraries
+- You get clean, readable, idiomatic C++ output
+
+---
+
+## What BotForge IS
+
+- A **DSL compiler** for a controlled subset of Python
+- A **code generator** that produces idiomatic C++ using real libraries
+- A **hardware abstraction layer** for robotics
+- An **extensible framework** for adding new targets and components
+
+## What BotForge is NOT
+
+- ❌ A Python-to-C++ translator (it does not translate arbitrary Python)
+- ❌ A Python runtime on Arduino
+- ❌ Cython, Nuitka, or MicroPython
+- ❌ A general-purpose transpiler
+
+---
+
+## Why Not Translate All Python?
+
+A full Python-to-C++ transpiler would need to:
+- Implement Python's garbage collector in C++
+- Handle dynamic typing, introspection, and the full stdlib
+- Bundle the Python runtime
+
+This is what Nuitka and Cython do — and they are enormous, complex tools.
+
+BotForge takes the opposite approach: **a small, explicit DSL where every construct has a known C++ equivalent**. The mapping is intentional, documented, and produces clean output.
+
+---
+
+## How It Works — Architecture
+
+```
+Python DSL (.py)
+      │
+      ▼
+  Analyzer          ← Validates: rejects while, for, lambda, class, etc.
+      │
+      ▼
+   Parser           ← Walks the AST, extracts bot config, components, loop
+      │
+      ▼
+     IR              ← BotProgram dataclasses (target-agnostic)
+      │
+      ▼
+  Generator         ← Translates IR + Jinja2 templates → C++
+      │
+      ▼
+Target: Arduino     ← Knows about Arduino.h, NewPing.h, Servo.h
+      │
+      ▼
+  main.cpp          ← Ready to flash
+```
+
+### Compilation Pipeline
+
+| Stage | Input | Output | File |
+|-------|-------|--------|------|
+| Analyzer | `.py` source | ✅ or AnalyzerError | `analyzer.py` |
+| Parser | `.py` AST | `BotProgram` IR | `parser.py` |
+| IR | — | dataclasses | `ir.py` |
+| Generator | `BotProgram` | `main.cpp` + `README.md` | `generator.py` |
+| Target | template context | rendered C++ | `targets/arduino.py` |
+
+---
+
+## DSL → IR → C++ Mapping
+
+| BotForge DSL | IR Node | C++ Library | Generated C++ |
+|---|---|---|---|
+| `Bot("mini_rover")` | `BotProgram` | `Arduino.h` | `setup()` / `loop()` |
+| `Wheels(left=(5,6), right=(9,10))` | `HardwareComponent` | custom class | `class Wheels {...}` |
+| `Ultrasonic("front", trigger=7, echo=8)` | `HardwareComponent` | `NewPing.h` | `NewPing front(7,8,200)` |
+| `Servo("arm", pin=3)` | `HardwareComponent` | `Servo.h` | `Servo arm; arm.attach(3)` |
+| `front.distance` | `Condition.left` | `NewPing.h` | `front.ping_cm()` |
+| `bot.forward(speed=80)` | `ActionCall` | custom Wheels | `wheels.forward(80)` |
+| `bot.turn_left(speed=50)` | `ActionCall` | custom Wheels | `wheels.turnLeft(50)` |
+| `bot.stop()` | `ActionCall` | custom Wheels | `wheels.stop()` |
+| `servo.write(angle=90)` | `ActionCall` | `Servo.h` | `arm.write(90)` |
+
+---
+
+## Installation
+
+```bash
+# Clone the repo
+git clone https://github.com/yourname/botforge
+cd botforge
+
+# Install in editable mode (with dev dependencies)
+pip install -e ".[dev]"
+```
+
+---
+
+## Usage
+
+### Build a robot
+
+```bash
+botforge build examples/obstacle_avoidance.py --target arduino
+```
+
+Output:
+```
+output/mini_rover/
+├── main.cpp
+└── README_GENERATED.md
+```
+
+### List targets
+
+```bash
+botforge targets
+```
+
+---
+
+## DSL Reference (V0.1)
+
+### Allowed
+
+```python
+from botforge import Bot, Wheels, Ultrasonic, Servo
+
+bot = Bot("robot_name")
+
+bot.use(Wheels(left=(pin1, pin2), right=(pin3, pin4)))
+sensor = bot.use(Ultrasonic("name", trigger=pin, echo=pin))
+servo = bot.use(Servo("name", pin=pin))
+
+@bot.loop
+def main():
+    if sensor.distance < 20:
+        bot.turn_left(speed=50)
+    else:
+        bot.forward(speed=80)
+```
+
+### Forbidden
+
+```python
+while True: ...          # ❌ loops not allowed
+for i in range(10): ...  # ❌
+class MyBot: ...          # ❌ no custom classes
+import os                 # ❌ no arbitrary imports
+lambda x: x              # ❌ no lambdas
+async def foo(): ...      # ❌ no async
+```
+
+---
+
+## Adding a New Target
+
+1. Create `botforge/targets/myplatform.py` with target metadata
+2. Add Jinja2 templates in `botforge/templates/myplatform_*.j2`
+3. Add a branch in `generator.py → BotForgeGenerator.generate()`
+4. Register in `cli.py → targets()`
+
+## Adding a New Sensor
+
+1. Add DSL stub in `botforge/dsl/sensors.py`
+2. Register in `parser.py → COMPONENT_REGISTRY`
+3. Add C++ translation in `generator.py → translate_condition_left()`
+4. Update the template
+
+## Adding a New Action
+
+1. Add translation in `generator.py → translate_action()`
+2. Add a movement mapping in `BOT_TO_WHEELS_MAP` or handle the new target directly
+
+---
+
+## Running Tests
+
+```bash
+pytest
+pytest --cov=botforge
+```
+
+---
+
+## Architecture in Layers
+
+```
+┌─────────────────────────────────────┐
+│         User DSL (.py file)         │  ← High-level, Python-like
+├─────────────────────────────────────┤
+│    Analyzer + Parser (AST layer)    │  ← Validation + extraction
+├─────────────────────────────────────┤
+│  Intermediate Representation (IR)   │  ← Target-agnostic data model
+├─────────────────────────────────────┤
+│   Generator + Templates (Jinja2)    │  ← Target-specific rendering
+├─────────────────────────────────────┤
+│      C++ Output (main.cpp)          │  ← Low-level, idiomatic C++
+└─────────────────────────────────────┘
+```
+
+### High Level vs Low Level
+
+| Concept | High Level (DSL) | Low Level (C++) |
+|---------|-----------------|-----------------|
+| Distance check | `front.distance < 20` | `front.ping_cm() < 20` |
+| Turn left | `bot.turn_left(speed=50)` | `wheels.turnLeft(50)` |
+| Move forward | `bot.forward(speed=80)` | `wheels.forward(80)` |
+| Sensor init | `Ultrasonic("front", trigger=7, echo=8)` | `NewPing front(7, 8, 200)` |
+
+### Why AST + IR + Templates?
+
+- **AST** — Python's native `ast` module gives us a structured tree without writing a parser from scratch
+- **IR** — decoupling parsing from generation means the same IR can target Arduino, ESP32, and ROS 2
+- **Templates** — Jinja2 templates separate C++ structure from Python logic; changing the output format doesn't require touching the compiler
+
+---
+
+## Limitations (V0.1)
+
+- Only `if/else` (no `elif`)
+- Only one `@bot.loop` function
+- No variables inside the loop
+- No arithmetic expressions
+- Only keyword arguments in actions (e.g., `speed=80`)
+- Only Arduino target
+
+---
+
+## Roadmap
+
+| Version | Features |
+|---------|---------|
+| V0.1 | Arduino, Wheels, Ultrasonic, if/else ✅ |
+| V0.2 | Servo, multiple sensors, better errors |
+| V0.3 | ESP32 target, Wi-Fi |
+| V0.4 | AccelStepper, I2C sensors |
+| V0.5 | ROS 2 target, rclcpp nodes |
+| V0.6 | OpenCV C++ target |
+| V1.0 | Stable DSL, full docs, real examples |
+
+Full roadmap: [docs/roadmap.md](docs/roadmap.md)
+
+---
+
+## Next Steps: ESP32, ROS 2, OpenCV
+
+### ESP32 (V0.3)
+The ESP32 target will generate code using `ledcWrite()` for PWM instead of `analogWrite()`, and optionally include Wi-Fi boilerplate. PlatformIO `platformio.ini` will also be generated.
+
+### ROS 2 (V0.5)
+The ROS 2 target will generate a complete `rclcpp` node with `CMakeLists.txt` and `package.xml`. The `@bot.loop` function becomes a timer callback. `bot.forward()` publishes a `geometry_msgs::Twist` message.
+
+### OpenCV (V0.6)
+The vision target generates C++ for companion computers (Raspberry Pi, Jetson Nano). Camera components map to `cv::VideoCapture`, and detection actions map to OpenCV processing pipelines.
+
+---
+
+## Contributing
+
+BotForge is designed to be hackable. The codebase is small and each module has a single clear responsibility. See [docs/architecture.md](docs/architecture.md) to understand the internals.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,0 +1,1 @@
+"""BotForge compilation targets."""
