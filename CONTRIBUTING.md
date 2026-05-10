@@ -1,4 +1,3 @@
-Contributing to BotForge
 Thank you for your interest in contributing to BotForge.
 BotForge is an experimental Python-inspired robotics DSL compiler that generates Arduino C++ code. The project is still in its early stages, so contributions are especially valuable when they improve correctness, documentation, tests, or the clarity of the DSL.
 Before contributing, please read this guide so changes stay consistent with the project's goals and architecture.
