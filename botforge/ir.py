@@ -1,36 +1,72 @@
 """
-Intermediate Representation (IR) for BotForge.
+BotForge Intermediate Representation (IR)
 
-The IR sits between the parsed AST and the C++ code generator.
-It is a clean, target-agnostic description of the robot program.
+The IR is the target-agnostic data model that sits between the AST parser
+and the C++ code generator. Every node is a typed dataclass — no loose
+strings for structured data.
+
+Design decisions:
+  - Condition.left is SensorRead, not a plain string.
+  - Condition.right is int | float, not a string.
+  - HardwareComponent uses .kind (not .type, which shadows a Python builtin).
+  - VarAssign lets the loop cache sensor reads into local C++ variables.
+  - BoolCondition supports `and` / `or` for compound conditions.
 """
 
+from __future__ import annotations
 from dataclasses import dataclass, field
 
 
 # ---------------------------------------------------------------------------
-# Hardware components
+# Hardware
 # ---------------------------------------------------------------------------
 
 @dataclass
 class HardwareComponent:
-    """Represents a physical hardware component attached to the robot."""
-    name: str           # variable name used in user code (e.g. "front")
-    type: str           # component type: "Wheels", "Ultrasonic", "Servo"
-    pins: dict          # pin mapping, e.g. {"trigger": 7, "echo": 8}
-    library: str        # C++ library required, e.g. "NewPing.h"
+    name: str       # DSL variable name, e.g. "front"
+    kind: str       # "Wheels" | "Ultrasonic" | "Servo" | "IRSensor" | "LineSensor"
+    pins: dict      # e.g. {"trigger": 7, "echo": 8}
+    library: str    # C++ library, e.g. "NewPing.h" or "custom"
 
 
 # ---------------------------------------------------------------------------
-# Conditions
+# Expressions
 # ---------------------------------------------------------------------------
 
 @dataclass
+class SensorRead:
+    """
+    Represents reading a property from a sensor, e.g. `front.distance`.
+    Translates to a C++ method call, e.g. `front.ping_cm()`.
+    """
+    sensor_name: str        # "front"
+    property_name: str      # "distance"
+
+
+@dataclass
+class VarRef:
+    """Reference to a local variable, e.g. `distance` declared via VarAssign."""
+    name: str
+
+
+# An expression that can appear on the left of a Condition
+ConditionLeft = SensorRead | VarRef
+
+
+@dataclass
 class Condition:
-    """A simple binary comparison: left op right."""
-    left: str           # e.g. "front.distance"
-    operator: str       # e.g. "<", ">", "==", "!="
-    right: str          # e.g. "20"
+    """Simple binary comparison: left  op  right."""
+    left: ConditionLeft     # SensorRead or VarRef
+    operator: str           # "<" | ">" | "<=" | ">=" | "==" | "!="
+    right: int | float      # numeric literal
+
+
+@dataclass
+class BoolCondition:
+    """Compound condition joined by 'and' or 'or'."""
+    left: Condition | BoolCondition
+    operator: str                       # "and" | "or"
+    right: Condition | BoolCondition
 
 
 # ---------------------------------------------------------------------------
@@ -38,23 +74,35 @@ class Condition:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class VarAssign:
+    """
+    Local variable assignment inside @bot.loop, e.g.:
+        distance = front.distance
+    Generates:  int distance = front.ping_cm();
+    """
+    var_name: str
+    value: SensorRead
+
+
+@dataclass
 class ActionCall:
-    """A method call on a robot component or the bot itself."""
-    target: str         # e.g. "bot" or "servo1"
-    method: str         # e.g. "forward", "turn_left", "write"
-    args: dict          # keyword args, e.g. {"speed": 80}
+    """Method call on `bot` or a named component."""
+    target: str     # "bot" | "arm" | any component name
+    method: str     # "forward" | "turn_left" | "write" | ...
+    args: dict      # {"speed": 80} | {"angle": 90}
 
 
 @dataclass
 class IfStatement:
-    """An if/else branch."""
-    condition: Condition
-    then_body: list     # list of ActionCall | IfStatement
-    else_body: list     # list of ActionCall | IfStatement (may be empty)
+    """if / elif / else chain."""
+    condition: Condition | BoolCondition
+    then_body: list[Statement]
+    elif_branches: list[tuple[Condition | BoolCondition, list[Statement]]]
+    else_body: list[Statement]
 
 
-# Union type for any statement inside loop
-Statement = ActionCall | IfStatement
+# All statement types that can appear inside a loop body
+Statement = VarAssign | ActionCall | IfStatement
 
 
 # ---------------------------------------------------------------------------
@@ -63,14 +111,12 @@ Statement = ActionCall | IfStatement
 
 @dataclass
 class LoopFunction:
-    """The @bot.loop decorated function body."""
     statements: list[Statement] = field(default_factory=list)
 
 
 @dataclass
 class BotProgram:
-    """Root IR node: represents the entire robot program."""
-    name: str                               # robot name, e.g. "mini_rover"
-    target: str                             # compilation target, e.g. "arduino"
+    name: str
+    target: str
     components: list[HardwareComponent] = field(default_factory=list)
     loop: LoopFunction | None = None

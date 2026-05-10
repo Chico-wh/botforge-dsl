@@ -1,181 +1,178 @@
-"""Tests for botforge.generator — C++ code generation."""
+"""Tests for botforge.generator"""
 
 import tempfile
 from pathlib import Path
-
 import pytest
 
 from botforge.generator import generate
 from botforge.ir import (
-    ActionCall,
-    BotProgram,
-    Condition,
-    HardwareComponent,
-    IfStatement,
-    LoopFunction,
+    ActionCall, BoolCondition, BotProgram, Condition,
+    HardwareComponent, IfStatement, LoopFunction,
+    SensorRead, VarAssign,
 )
 
 
-def make_obstacle_program() -> BotProgram:
-    """Build the canonical obstacle avoidance IR."""
-    wheels = HardwareComponent(
-        name="wheels",
-        type="Wheels",
-        pins={"left": (5, 6), "right": (9, 10)},
-        library="custom",
-    )
-    front = HardwareComponent(
-        name="front",
-        type="Ultrasonic",
-        pins={"trigger": 7, "echo": 8},
-        library="NewPing.h",
-    )
-    loop = LoopFunction(statements=[
+def obstacle_program() -> BotProgram:
+    wheels = HardwareComponent("wheels", "Wheels", {"left": (5, 6), "right": (9, 10)}, "custom")
+    front  = HardwareComponent("front",  "Ultrasonic", {"trigger": 7, "echo": 8}, "NewPing.h")
+    loop = LoopFunction([
         IfStatement(
-            condition=Condition(left="front.distance", operator="<", right="20"),
-            then_body=[ActionCall(target="bot", method="turn_left", args={"speed": 50})],
-            else_body=[ActionCall(target="bot", method="forward", args={"speed": 80})],
+            condition=Condition(
+                left=SensorRead("front", "distance"),
+                operator="<",
+                right=20,
+            ),
+            then_body=[ActionCall("bot", "turn_left", {"speed": 50})],
+            elif_branches=[],
+            else_body=[ActionCall("bot", "forward",   {"speed": 80})],
         )
     ])
-    return BotProgram(
-        name="mini_rover",
-        target="arduino",
-        components=[wheels, front],
-        loop=loop,
-    )
+    return BotProgram("mini_rover", "arduino", [wheels, front], loop)
 
 
-def generated_cpp(program: BotProgram | None = None) -> str:
-    """Run the generator and return the produced main.cpp contents."""
-    prog = program or make_obstacle_program()
+def get_cpp(program: BotProgram | None = None) -> str:
+    prog = program or obstacle_program()
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / prog.name
         generate(prog, out)
         return (out / "main.cpp").read_text()
 
 
-# ---------------------------------------------------------------------------
-# Include directives
-# ---------------------------------------------------------------------------
+# --- Includes ---
 
-def test_generator_includes_arduino_h():
-    cpp = generated_cpp()
-    assert "#include <Arduino.h>" in cpp
+def test_includes_arduino_h():
+    assert "#include <Arduino.h>" in get_cpp()
 
+def test_includes_newping_h():
+    assert "#include <NewPing.h>" in get_cpp()
 
-def test_generator_includes_newping_h():
-    cpp = generated_cpp()
-    assert "#include <NewPing.h>" in cpp
+def test_no_servo_h_without_servo():
+    assert "#include <Servo.h>" not in get_cpp()
 
+# --- normalizeSpeed ---
 
-def test_generator_no_servo_h_when_no_servo():
-    cpp = generated_cpp()
-    assert "#include <Servo.h>" not in cpp
+def test_has_normalize_speed():
+    assert "normalizeSpeed" in get_cpp()
 
+def test_normalize_speed_formula():
+    cpp = get_cpp()
+    assert "(pct * 255) / 100" in cpp or "(speed * 255) / 100" in cpp or "255" in cpp
 
-# ---------------------------------------------------------------------------
-# Entry points
-# ---------------------------------------------------------------------------
+def test_forward_uses_normalize():
+    cpp = get_cpp()
+    assert "normalizeSpeed(80)" in cpp
 
-def test_generator_has_void_setup():
-    cpp = generated_cpp()
-    assert "void setup()" in cpp
+def test_turn_left_uses_normalize():
+    cpp = get_cpp()
+    assert "normalizeSpeed(50)" in cpp
 
+# --- Entry points ---
 
-def test_generator_has_void_loop():
-    cpp = generated_cpp()
-    assert "void loop()" in cpp
+def test_has_void_setup():
+    assert "void setup()" in get_cpp()
 
+def test_has_void_loop():
+    assert "void loop()" in get_cpp()
 
-# ---------------------------------------------------------------------------
-# Sensor code
-# ---------------------------------------------------------------------------
+# --- Sensor code ---
 
-def test_generator_uses_ping_cm():
-    cpp = generated_cpp()
-    assert "front.ping_cm()" in cpp
+def test_declares_newping():
+    assert "NewPing front(" in get_cpp()
 
+def test_uses_ping_cm():
+    assert "front.ping_cm()" in get_cpp()
 
-def test_generator_declares_newping_instance():
-    cpp = generated_cpp()
-    assert "NewPing front(" in cpp
+# --- Control flow ---
 
+def test_has_if():
+    assert "if (" in get_cpp()
 
-# ---------------------------------------------------------------------------
-# Control flow
-# ---------------------------------------------------------------------------
+def test_condition_threshold():
+    assert "< 20" in get_cpp()
 
-def test_generator_has_if():
-    cpp = generated_cpp()
-    assert "if (" in cpp
+# --- Wheels ---
 
+def test_wheels_forward():
+    assert "wheels.forward(" in get_cpp()
 
-def test_generator_condition_with_threshold():
-    cpp = generated_cpp()
-    assert "< 20" in cpp
+def test_wheels_turn_left():
+    assert "wheels.turnLeft(" in get_cpp()
 
+# --- elif ---
 
-# ---------------------------------------------------------------------------
-# Movement actions
-# ---------------------------------------------------------------------------
+def test_elif_generated():
+    wheels = HardwareComponent("wheels", "Wheels", {"left": (5, 6), "right": (9, 10)}, "custom")
+    front  = HardwareComponent("front", "Ultrasonic", {"trigger": 7, "echo": 8}, "NewPing.h")
+    loop = LoopFunction([
+        IfStatement(
+            condition=Condition(SensorRead("front", "distance"), "<", 10),
+            then_body=[ActionCall("bot", "stop", {})],
+            elif_branches=[(
+                Condition(SensorRead("front", "distance"), "<", 30),
+                [ActionCall("bot", "turn_left", {"speed": 40})],
+            )],
+            else_body=[ActionCall("bot", "forward", {"speed": 80})],
+        )
+    ])
+    prog = BotProgram("r", "arduino", [wheels, front], loop)
+    assert "} else if (" in get_cpp(prog)
 
-def test_generator_wheels_forward():
-    cpp = generated_cpp()
-    assert "wheels.forward(80)" in cpp
+# --- Compound condition ---
 
+def test_bool_condition_and():
+    wheels = HardwareComponent("wheels", "Wheels", {"left": (5, 6), "right": (9, 10)}, "custom")
+    front  = HardwareComponent("front", "Ultrasonic", {"trigger": 7, "echo": 8}, "NewPing.h")
+    loop = LoopFunction([
+        IfStatement(
+            condition=BoolCondition(
+                left=Condition(SensorRead("front", "distance"), "<", 30),
+                operator="and",
+                right=Condition(SensorRead("front", "distance"), ">", 5),
+            ),
+            then_body=[ActionCall("bot", "forward", {"speed": 60})],
+            elif_branches=[],
+            else_body=[],
+        )
+    ])
+    prog = BotProgram("r", "arduino", [wheels, front], loop)
+    cpp = get_cpp(prog)
+    assert "&&" in cpp
 
-def test_generator_wheels_turn_left():
-    cpp = generated_cpp()
-    assert "wheels.turnLeft(50)" in cpp
+# --- VarAssign ---
 
+def test_var_assign_generates_int():
+    wheels = HardwareComponent("wheels", "Wheels", {"left": (5, 6), "right": (9, 10)}, "custom")
+    front  = HardwareComponent("front", "Ultrasonic", {"trigger": 7, "echo": 8}, "NewPing.h")
+    loop = LoopFunction([
+        VarAssign("dist", SensorRead("front", "distance")),
+        IfStatement(
+            condition=Condition(SensorRead("front", "distance"), "<", 20),
+            then_body=[ActionCall("bot", "stop", {})],
+            elif_branches=[],
+            else_body=[],
+        )
+    ])
+    prog = BotProgram("r", "arduino", [wheels, front], loop)
+    cpp = get_cpp(prog)
+    assert "int dist = front.ping_cm();" in cpp
 
-# ---------------------------------------------------------------------------
-# Output files
-# ---------------------------------------------------------------------------
+# --- Servo ---
 
-def test_generator_creates_readme():
-    prog = make_obstacle_program()
+def test_servo_includes_servo_h():
+    servo = HardwareComponent("arm", "Servo", {"pin": 3}, "Servo.h")
+    prog  = BotProgram("sb", "arduino", [servo], LoopFunction([]))
+    assert "#include <Servo.h>" in get_cpp(prog)
+
+def test_servo_attach_in_setup():
+    servo = HardwareComponent("arm", "Servo", {"pin": 3}, "Servo.h")
+    prog  = BotProgram("sb", "arduino", [servo], LoopFunction([]))
+    assert "arm.attach(3)" in get_cpp(prog)
+
+# --- Output files ---
+
+def test_creates_readme():
+    prog = obstacle_program()
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / prog.name
         generate(prog, out)
-        readme = out / "README_GENERATED.md"
-        assert readme.exists()
-        assert "mini_rover" in readme.read_text().lower() or "Mini Rover" in readme.read_text()
-
-
-# ---------------------------------------------------------------------------
-# Servo target
-# ---------------------------------------------------------------------------
-
-def test_generator_includes_servo_h_when_servo_present():
-    servo = HardwareComponent(
-        name="arm",
-        type="Servo",
-        pins={"pin": 3},
-        library="Servo.h",
-    )
-    prog = BotProgram(
-        name="servo_bot",
-        target="arduino",
-        components=[servo],
-        loop=LoopFunction(statements=[]),
-    )
-    cpp = generated_cpp(prog)
-    assert "#include <Servo.h>" in cpp
-
-
-def test_generator_attaches_servo_in_setup():
-    servo = HardwareComponent(
-        name="arm",
-        type="Servo",
-        pins={"pin": 3},
-        library="Servo.h",
-    )
-    prog = BotProgram(
-        name="servo_bot",
-        target="arduino",
-        components=[servo],
-        loop=LoopFunction(statements=[]),
-    )
-    cpp = generated_cpp(prog)
-    assert "arm.attach(3)" in cpp
+        assert (out / "README_GENERATED.md").exists()

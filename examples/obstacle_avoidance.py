@@ -1,10 +1,9 @@
 """
-BotForge DSL Example: Obstacle Avoidance
+BotForge Example: Obstacle Avoidance
 
-A mini rover that drives forward and turns left when
+Mini rover with ultrasonic sensor. Drives forward, turns left when
 an obstacle is detected within 20 cm.
 
-Run:
     botforge build examples/obstacle_avoidance.py --target arduino
 """
 
